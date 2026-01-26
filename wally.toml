@@ -2,7 +2,7 @@
 name = "veraci-ty/obsidian"
 description = "A lightweight, strictly-typed reactive UI library for Roblox"
 license = "MIT"
-version = "1.0.1"
+version = "1.0.2"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 include = ["default.project.json", "LICENSE", "src"]
