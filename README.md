@@ -210,4 +210,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 Obsidian takes inspiration from:
 - [Fusion](https://github.com/Elttob/Fusion) - Excellent reactive framework
-- [Vide](https://github.com/1ForeverHD/Vide) - Elegant UI syntax
+- [Vide](https://github.com/centau/vide) - Elegant UI syntax
