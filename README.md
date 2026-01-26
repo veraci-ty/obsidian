@@ -23,7 +23,7 @@ Add to your `wally.toml`:
 
 ```toml
 [dependencies]
-Obsidian = "veraci-ty/obsidian@1.0.0"
+obsidian = "veraci-ty/obsidian@1.0.1"
 ```
 
 Then run:
