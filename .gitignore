@@ -36,3 +36,6 @@ Obsidian/designer/*.user
 
 website/dist/
 website/build/
+
+wally.lua
+wally.meta.json
