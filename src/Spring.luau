@@ -38,6 +38,12 @@ local function lerp(a, b, t)
 	return b
 end
 
+--[[
+TODO: stress test this make sure i dont get any nan values, might optimize if this does end up running every frame which i assume it would. 
+
+Maybe clamp alpha: alpha = math.clamp(alpha, 0, 1)?
+idk man
+--]]
 @native
 local function stepSprings(dt: number)
 	for _, s in springs do

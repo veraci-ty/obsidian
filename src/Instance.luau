@@ -153,8 +153,13 @@ local function establish<T>(name: string, factory: (props: ComponentProps<T>) ->
 end
 
 local function mount(render: () -> Instance, parent: Instance): Instance
-	local instance = render()
+	local instance, cleanup = Reactive.root(function()
+		return render()
+	end)
 	instance.Parent = parent
+	instance.Destroying:Once(function()
+		cleanup()
+	end)
 	return instance
 end
 
