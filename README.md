@@ -168,7 +168,6 @@ Obsidian.new "Button" { Text = "Click Me" }
 - `Parent` - Reactive parent property
 - `OnDestroy` - Cleanup callbacks
 - `Ref` - Reference callbacks
-- `mount(render, parent)` - Mount UI to parent
 - `attach(render, parent)` - Alias for `mount`
 - `apply(instance)` - Apply props to existing instance
 
