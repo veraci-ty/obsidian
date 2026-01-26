@@ -3,7 +3,7 @@
   
   # Obsidian
   
-  A lightweight, strictly-typed reactive UI library for Roblox that combines the best of Fusion and Vide. Zero dependencies. Maximum performance.
+  A lightweight, strictly-typed reactive UI library for Roblox that combines the best of Fusion and Vide. Zero dependencies. Performant.
 </div>
 
 ## Features

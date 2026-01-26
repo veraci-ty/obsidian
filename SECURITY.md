@@ -9,7 +9,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, please **do not** open a public issue. Instead, please email security concerns to the maintainers or open a private security advisory on GitHub.
+If you discover a security vulnerability, please **do not** open a public issue. Instead, please email security concerns to: vera@useobsidian.dev.
 
 Please include:
 - Description of the vulnerability

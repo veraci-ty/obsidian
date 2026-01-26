@@ -1,49 +1,38 @@
-# Build outputs
 *.rbxm
 *.rbxl
 *.rbxlx
 *.luau.luac
 
-# Releases
 releases/
 *.zip
 
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Dependencies
 node_modules/
 package-lock.json
 
-# Logs
 *.log
 npm-debug.log*
 
-# Environment
 .env
 .env.local
 
-# Temporary files
 *.tmp
 *.temp
 .cache/
 
-# Obsidian designer build files
 Obsidian/designer/build/
 Obsidian/designer/*.user
 
-# Source maps (if generated)
 *.map
 
-# Website build
 website/dist/
 website/build/
