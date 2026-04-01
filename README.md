@@ -92,7 +92,7 @@ end, screenGui)
 
 ## Documentation
 
-Full documentation is available at: [https://obsidian-ui.github.io](https://obsidian-ui.github.io)
+Full documentation is available at: [https://useobsidian.dev](https://useobsidian.dev)
 
 ### Core Concepts
 
