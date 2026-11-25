@@ -41,6 +41,80 @@ export type ComponentName = InstanceClassName | EstablishedComponentName
 
 local registry: { [string]: (props: { [any]: any }) -> Instance } = {}
 local ctorCache: { [string]: (props: { [any]: any }) -> Instance } = {}
+local creationLogs: { { [Instance]: boolean } } = {}
+
+local function logCreation(instance: Instance)
+	local log = creationLogs[#creationLogs]
+	if log then
+		log[instance] = true
+	end
+end
+
+local function collectChildren(result: any, out: { Instance }, seen: { [Instance]: boolean })
+	if typeof(result) == "Instance" then
+		if not seen[result] then
+			seen[result] = true
+			table.insert(out, result)
+		end
+	elseif type(result) == "table" then
+		for _, c in result do
+			if typeof(c) == "Instance" and not seen[c] then
+				seen[c] = true
+				table.insert(out, c)
+			end
+		end
+	end
+end
+
+local function bindChildren(instance: Instance, render: () -> any): () -> ()
+	local current: { [Instance]: boolean } = {}
+	local owned: { [Instance]: boolean } = {}
+	local function release(child: Instance)
+		if owned[child] then
+			owned[child] = nil
+			child:Destroy()
+		elseif child.Parent == instance then
+			child.Parent = nil
+		end
+	end
+	local stop = Reactive.effect(function()
+		local log: { [Instance]: boolean } = {}
+		local depth = #creationLogs + 1
+		creationLogs[depth] = log
+		local ok, result = pcall(render)
+		for i = #creationLogs, depth, -1 do
+			creationLogs[i] = nil
+		end
+		if not ok then
+			error(result, 0)
+		end
+		local list: { Instance } = {}
+		local nextSet: { [Instance]: boolean } = {}
+		collectChildren(result, list, nextSet)
+		for _, c in list do
+			if log[c] then
+				owned[c] = true
+			end
+			c.Parent = instance
+		end
+		for c in current do
+			if not nextSet[c] then
+				release(c)
+			end
+		end
+		current = nextSet
+	end)
+	return function()
+		stop()
+		for c in current do
+			if owned[c] then
+				c:Destroy()
+			end
+		end
+		table.clear(current)
+		table.clear(owned)
+	end
+end
 
 local function applyProps(instance: Instance, props: { [any]: any }): { () -> () }
 	local cleanups = {}
@@ -72,19 +146,7 @@ local function applyProps(instance: Instance, props: { [any]: any }): { () -> ()
 			if typeof(child) == "Instance" then
 				child.Parent = instance
 			elseif type(child) == "function" then
-				local stop = Reactive.effect(function()
-					local result = child()
-					if type(result) == "table" then
-						for _, c in result do
-							if typeof(c) == "Instance" then
-								c.Parent = instance
-							end
-						end
-					elseif typeof(result) == "Instance" then
-						result.Parent = instance
-					end
-				end)
-				table.insert(cleanups, stop)
+				table.insert(cleanups, bindChildren(instance, child))
 			elseif type(child) == "table" then
 				for _, c in child do
 					if typeof(c) == "Instance" then
@@ -115,6 +177,7 @@ end
 local function createCtor(className: string): (props: { [any]: any }) -> Instance
 	return function(props: { [any]: any }): Instance
 		local instance = Instance.new(className)
+		logCreation(instance)
 		local cleanups = applyProps(instance, props)
 		if #cleanups > 0 then
 			instance.Destroying:Once(function()

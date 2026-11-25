@@ -154,7 +154,7 @@ Obsidian.new "Button" { Text = "Click Me" }
 - `computed(fn)` - Alias for `derive`
 - `effect(fn)` - Run side effects on change
 - `Value(initial)` - State object with `get`, `set`, `update` methods
-- `spring(input, period?, damping?)` - Smooth spring animations
+- `spring(input, period?, damping?)` - Damped spring animation; `period` is the oscillation period in seconds (default 0.35), `damping` is the damping ratio (default 0.8, 1 = no overshoot). Supports number, Vector2, Vector3, UDim2, Color3 and CFrame
 - `peek(value)` - Read without tracking
 - `untrack(fn)` - Execute without tracking dependencies
 - `batch(fn)` - Batch reactive updates

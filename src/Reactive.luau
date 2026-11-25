@@ -11,23 +11,33 @@ export type State<T> = {
 type Node = {
 	cache: any,
 	effect: ((any) -> any)?,
-	deps: { [SourceNode]: boolean },
+	derived: boolean,
+	deps: { [Node]: boolean },
+	children: { [Node]: boolean },
 	owner: Node?,
 	owned: { Node }?,
 	cleanups: { () -> () }?,
-	dirty: boolean,
+	state: number,
+	destroyed: boolean,
 }
 
-type SourceNode = {
-	cache: any,
-	children: { [Node]: boolean },
-}
+local CLEAN = 0
+local CHECK = 1
+local DIRTY = 2
 
 local scopeStack: { Node } = {}
 local updateQueue: { Node } = {}
 local updateSet: { [Node]: boolean } = {}
-local batching = false
 local batchDepth = 0
+local flushing = false
+
+local function report(err: any)
+	task.spawn(error, err, 0)
+end
+
+local function traceback(err: any): string
+	return debug.traceback(tostring(err), 2)
+end
 
 local function getCurrentScope(): Node?
 	return scopeStack[#scopeStack]
@@ -41,20 +51,54 @@ local function popScope()
 	table.remove(scopeStack)
 end
 
+local function newNode(owner: Node?, effect: ((any) -> any)?, derived: boolean): Node
+	local node: Node = {
+		cache = nil,
+		effect = effect,
+		derived = derived,
+		deps = {},
+		children = {},
+		owner = owner,
+		owned = nil,
+		cleanups = nil,
+		state = CLEAN,
+		destroyed = false,
+	}
+	if owner then
+		local owned = owner.owned
+		if owned then
+			table.insert(owned, node)
+		else
+			owner.owned = { node }
+		end
+	end
+	return node
+end
+
+local function subscribe(scope: Node, dep: Node)
+	dep.children[scope] = true
+	scope.deps[dep] = true
+end
+
 local function addCleanup(node: Node, fn: () -> ())
-	if node.cleanups then
-		table.insert(node.cleanups, fn)
+	local cleanups = node.cleanups
+	if cleanups then
+		table.insert(cleanups, fn)
 	else
 		node.cleanups = { fn }
 	end
 end
 
 local function flushCleanups(node: Node)
-	if node.cleanups then
-		for _, fn in node.cleanups do
-			pcall(fn)
+	local cleanups = node.cleanups
+	if cleanups then
+		node.cleanups = nil
+		for _, fn in cleanups do
+			local ok, err = xpcall(fn :: () -> ...any, traceback)
+			if not ok then
+				report(err)
+			end
 		end
-		table.clear(node.cleanups)
 	end
 end
 
@@ -65,49 +109,38 @@ local function unsubscribe(node: Node)
 	table.clear(node.deps)
 end
 
-local function destroyNode(node: Node)
-	flushCleanups(node)
-	unsubscribe(node)
-	if node.owner and node.owner.owned then
-		local idx = table.find(node.owner.owned, node)
-		if idx then
-			local n = #node.owner.owned
-			node.owner.owned[idx] = node.owner.owned[n]
-			node.owner.owned[n] = nil
+local destroyNode: (Node) -> ()
+
+local function destroyOwned(node: Node)
+	local owned = node.owned
+	if owned then
+		while owned[1] do
+			destroyNode(owned[1])
 		end
 	end
-	if node.owned then
-		while node.owned[1] do
-			destroyNode(node.owned[1])
+end
+
+destroyNode = function(node: Node)
+	if node.destroyed then
+		return
+	end
+	node.destroyed = true
+	node.state = CLEAN
+	destroyOwned(node)
+	flushCleanups(node)
+	unsubscribe(node)
+	table.clear(node.children)
+	local owner = node.owner
+	local list = if owner then owner.owned else nil
+	if list then
+		local idx = table.find(list, node)
+		if idx then
+			local n = #list
+			list[idx] = list[n]
+			list[n] = nil
 		end
 	end
 	node.owner = nil
-end
-
-local function destroyOwned(node: Node)
-	if node.owned then
-		while node.owned[1] do
-			destroyNode(node.owned[1])
-		end
-	end
-end
-
-local function evaluateNode(node: Node)
-	if not node.effect then
-		return false
-	end
-	local oldCache = node.cache
-	flushCleanups(node)
-	destroyOwned(node)
-	unsubscribe(node)
-	pushScope(node)
-	local ok, result = pcall(node.effect, node.cache)
-	popScope()
-	if ok then
-		node.cache = result
-		node.dirty = false
-	end
-	return oldCache ~= node.cache
 end
 
 local function queueNode(node: Node)
@@ -117,104 +150,132 @@ local function queueNode(node: Node)
 	end
 end
 
+local function markChildren(node: Node, state: number)
+	for child in node.children do
+		if child.state < state then
+			local previous = child.state
+			child.state = state
+			if child.derived then
+				if previous == CLEAN then
+					markChildren(child, CHECK)
+				end
+			else
+				queueNode(child)
+			end
+		end
+	end
+end
+
+local function hasChanged(old: any, new: any): boolean
+	return old ~= new or (type(new) == "table" and not table.isfrozen(new))
+end
+
+local function evaluateNode(node: Node)
+	local fn = node.effect
+	if not fn or node.destroyed then
+		return
+	end
+	local oldCache = node.cache
+	destroyOwned(node)
+	flushCleanups(node)
+	unsubscribe(node)
+	pushScope(node)
+	local ok, result = xpcall(fn, traceback, oldCache)
+	popScope()
+	node.state = CLEAN
+	if not ok then
+		report(result)
+		return
+	end
+	node.cache = result
+	if node.derived and hasChanged(oldCache, result) then
+		for child in node.children do
+			child.state = DIRTY
+		end
+	end
+end
+
+local function updateNode(node: Node)
+	if node.destroyed then
+		return
+	end
+	if node.state == CHECK then
+		for dep in node.deps do
+			if dep.derived then
+				updateNode(dep)
+				if node.state == DIRTY then
+					break
+				end
+			end
+		end
+	end
+	if node.state == DIRTY then
+		evaluateNode(node)
+	end
+	node.state = CLEAN
+end
+
 local function flushQueue()
+	if flushing or batchDepth > 0 then
+		return
+	end
+	flushing = true
 	local i = 1
 	while i <= #updateQueue do
 		local node = updateQueue[i]
 		updateSet[node] = nil
-		if node.owner and node.dirty then
-			if evaluateNode(node) then
-				for child in node.deps do
-					if child.children then
-						for c in child.children do
-							if c.effect then
-								c.dirty = true
-								queueNode(c)
-							end
-						end
-					end
-				end
-			end
+		if not node.destroyed and node.state ~= CLEAN then
+			updateNode(node)
 		end
 		i += 1
 	end
 	table.clear(updateQueue)
-end
-
-local function notifyChildren(srcNode: SourceNode)
-	for child in srcNode.children do
-		child.dirty = true
-		queueNode(child)
-	end
-	if not batching then
-		flushQueue()
-	end
+	flushing = false
 end
 
 local function source<T>(initial: T): Source<T>
-	local node: SourceNode = {
-		cache = initial,
-		children = {},
-	}
-	local function fn(...): T
+	local node = newNode(nil, nil, false)
+	node.cache = initial
+	local function fn(...: T): T
 		if select("#", ...) == 0 then
 			local scope = getCurrentScope()
 			if scope then
-				node.children[scope] = true
-				scope.deps[node] = true
+				subscribe(scope, node)
 			end
 			return node.cache
 		end
-		local newValue = ... :: T
-		if node.cache == newValue and (type(newValue) ~= "table" or table.isfrozen(newValue)) then
+		local newValue = ...
+		if not hasChanged(node.cache, newValue) then
 			return newValue
 		end
 		node.cache = newValue
-		notifyChildren(node)
+		markChildren(node, DIRTY)
+		flushQueue()
 		return newValue
 	end
-	return fn
+	return fn :: any
 end
 
 local function root<T>(fn: () -> T): (T, () -> ())
-	local node: Node = {
-		cache = nil,
-		effect = nil,
-		deps = {},
-		owner = nil,
-		owned = nil,
-		cleanups = nil,
-		dirty = false,
-	}
+	local node = newNode(nil, nil, false)
 	pushScope(node)
-	local result = fn()
+	local ok, result = xpcall(fn, traceback)
 	popScope()
-	return result, function()
+	local function dispose()
 		destroyNode(node)
 	end
+	if not ok then
+		dispose()
+		error(result, 0)
+	end
+	return result, dispose
 end
 
 local function effect(fn: () -> ()): () -> ()
-	local owner = getCurrentScope()
-	local node: Node = {
-		cache = nil,
-		effect = function()
-			fn()
-			return nil
-		end,
-		deps = {},
-		owner = owner,
-		owned = nil,
-		cleanups = nil,
-		dirty = true,
-	}
-	if owner then
-		if owner.owned then
-			table.insert(owner.owned, node)
-		else
-			owner.owned = { node }
-		end
-	end
+	local node = newNode(getCurrentScope(), function(): any
+		fn()
+		return nil
+	end, false)
 	evaluateNode(node)
 	return function()
 		destroyNode(node)
@@ -222,36 +283,15 @@ local function effect(fn: () -> ()): () -> ()
 end
 
 local function derive<T>(fn: () -> T): () -> T
-	local owner = getCurrentScope()
-	local node: Node = {
-		cache = nil :: any,
-		effect = function()
-			return fn()
-		end,
-		deps = {},
-		owner = owner,
-		owned = nil,
-		cleanups = nil,
-		dirty = true,
-	}
-	if owner then
-		if owner.owned then
-			table.insert(owner.owned, node)
-		else
-			owner.owned = { node }
-		end
-	end
+	local node = newNode(getCurrentScope(), function(): any
+		return fn()
+	end, true)
 	evaluateNode(node)
 	return function(): T
+		updateNode(node)
 		local scope = getCurrentScope()
-		if scope then
-			for dep in node.deps do
-				dep.children[scope] = true
-				scope.deps[dep] = true
-			end
-		end
-		if node.dirty then
-			evaluateNode(node)
+		if scope and not node.destroyed then
+			subscribe(scope, node)
 		end
 		return node.cache
 	end
@@ -260,13 +300,13 @@ end
 local function Value<T>(initial: T): State<T>
 	local src = source(initial)
 	return {
-		get = function(self): T
+		get = function(self: State<T>): T
 			return src()
 		end,
-		set = function(self, value: T)
+		set = function(self: State<T>, value: T)
 			src(value)
 		end,
-		update = function(self, fn: (T) -> T)
+		update = function(self: State<T>, fn: (T) -> T)
 			src(fn(src()))
 		end,
 		source = src,
@@ -277,44 +317,34 @@ local function computed<T>(fn: () -> T): () -> T
 	return derive(fn)
 end
 
-local function peek<T>(value: (() -> T) | State<T>): T
-	local prev = scopeStack[#scopeStack]
-	scopeStack[#scopeStack] = nil
-	local result: T
-	if type(value) == "function" then
-		result = (value :: () -> T)()
-	else
-		result = (value :: State<T>):get()
-	end
-	if prev then
-		scopeStack[#scopeStack + 1] = prev
+local function untrack<T>(fn: () -> T): T
+	local saved = scopeStack
+	scopeStack = {}
+	local ok, result = xpcall(fn, traceback)
+	scopeStack = saved
+	if not ok then
+		error(result, 0)
 	end
 	return result
 end
 
-local function untrack<T>(fn: () -> T): T
-	local prev = scopeStack[#scopeStack]
-	scopeStack[#scopeStack] = nil
-	local result = fn()
-	if prev then
-		scopeStack[#scopeStack + 1] = prev
+local function peek<T>(value: (() -> T) | State<T>): T
+	if type(value) == "function" then
+		return untrack(value :: () -> T)
 	end
-	return result
+	local state = value :: State<T>
+	return untrack(function(): T
+		return state:get()
+	end)
 end
 
 local function batch(fn: () -> ())
 	batchDepth += 1
-	if batchDepth == 1 then
-		batching = true
-	end
-	local ok, err = pcall(fn)
+	local ok, err = xpcall(fn :: () -> ...any, traceback)
 	batchDepth -= 1
-	if batchDepth == 0 then
-		batching = false
-		flushQueue()
-	end
+	flushQueue()
 	if not ok then
-		error(err, 2)
+		error(err, 0)
 	end
 end
 
